@@ -1,0 +1,436 @@
+---
+title: "N-gram Analysis of text data"
+author: "Baburaj Velayudhan"
+date: "6/5/2019"
+output:
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Synopsis
+This report is a milestone report for Coursera Data Science Capstone Project. The goal of the Capstone Project is to build predictive text models that predict the next word based on the previously entered words.
+
+This report summarizes the natural language processing and text mining tools used in R to clean, tokenize, and conduct exploratory analysis on the large text data sets. Text data used in this project includes English texts from news, blogs and twitter by SwiftKey.
+
+## Basic Text Data Summaries
+Though SwiftKey provides many files, this report focuses only on 3,  “en_US.news.txt”, “en_US.blogs.txt”, and “en_US.twitter.txt”.
+The summary of the files (size, lines and words) are listed in the table below. The number of lines and number of words could be an over estimate since
+the word count is obtained by splitting the statment based on spaces and a line might contain multiple sentences. The steps taken are described in below sections.
+
+
+```{r, include = FALSE, echo=FALSE}
+library(stringi)
+library(kableExtra)
+
+###
+## the function fileInfo takes a filename as input and
+## returns the file size, number of lines and number of words
+###
+fileInfo <- function(filename) {
+  sizeMB <- round((file.size(filename) / (1024.0 * 1024.0)),2)
+  filehandle <- file(filename, open = "r")
+  contents <-
+    readLines(filehandle, encoding = "UTF-8", skipNul = TRUE)
+  numlines <- length(contents)
+  numwords <-
+    round((sum(stri_count_regex(contents, "\\s+")) / (1000.0 * 1000.0)),2)
+  close(filehandle)
+  result <-
+    list(
+      "size(MB)" = sizeMB,
+      "numLines" = numlines,
+      "wordCount(Million)" = numwords
+    )
+  return (result)
+}
+
+#
+# This script is to download the Coursera-SwiftKey.zip
+# file from the given URL and extract the contents
+#
+
+# set source file URL and the default name of the file downloaded from the source url
+sourceFileURL = "https://d396qusza40orc.cloudfront.net/dsscapstone/dataset/Coursera-SwiftKey.zip"
+downloadedFile = paste0("./data/" , "Coursera-SwiftKey.zip")
+downloadFolder = paste0("./data/" , "Coursera-SwiftKey")
+
+# check if the downloaded file exist. Download if it does not...
+if (!file.exists(downloadedFile)) {
+  result <-
+    tryCatch(
+      download.file(sourceFileURL, downloadedFile, method = "auto"),
+      error = function(e)
+        1
+    )
+  
+  if (result != 1) {
+    unzip(downloadedFile, exdir = downloadFolder)
+  }
+}
+
+# after extracting from archive, get all file names from the extracted folder
+files <-
+  list.files(downloadFolder, recursive = TRUE, full.names = TRUE)
+
+en_files <-
+  c(
+    "./data/Coursera-SwiftKey/final/en_US/en_US.blogs.txt",
+    "./data/Coursera-SwiftKey/final/en_US/en_US.news.txt",
+    "./data/Coursera-SwiftKey/final/en_US/en_US.twitter.txt"
+  )
+
+result <- sapply(en_files, fileInfo)
+colnames(result) <- c("Blogs", "News", "Twitter")
+rownames(result) <- c("File Size (MB)", "Lines", "Words (Million)")
+
+result_df <- as.data.frame(result)
+kable(result_df)
+```
+
+## N-gram Data Analysis
+
+# Sample data for analysis
+Since the input files are large, we take 1% of data from each of them for this analysis. Three new files are created with the sample data, the names will be starting with the prefix "sample"
+
+
+```{r, include= FALSE}
+
+##
+## function sampleDataFile takes a filename and a sample data percent
+## as input and creates a new file sample_<filename> that contains
+## a sample from the main file. This is done to speed up the analysis
+
+set.seed(238)
+sampleDataFile <- function (filename, SAMPLE_DATA_PERCENT) {
+  fileHandle <- file (filename, open = "r")
+  contents <-
+    readLines(fileHandle, encoding = "UTF-8", skipNul = TRUE)
+  sampledData <-
+    contents[sample(length(contents), SAMPLE_DATA_PERCENT * length(contents))]
+  sampledDataFileName <-
+    paste0(dirname(filename), paste0("//", paste0("sample_", basename(filename))))
+  write(
+    sampledData,
+    file = sampledDataFileName,
+    ncolumns = 1,
+    append = FALSE,
+    sep = "\t"
+  )
+  close (fileHandle)
+  return (sampledDataFileName)
+}
+
+
+# define the sampling percent. Only this much data will be used from the files
+SAMPLE_DATA_PERCENT <- 0.05
+#create sample files from the main files, based on the sampling percent
+samples <- sapply (en_files, sampleDataFile, SAMPLE_DATA_PERCENT)
+
+sampleData <- sapply(samples, read.table, sep = "\t", quote = "")
+sampleDataNames <- c("news", "blogs", "twitter")
+sampleData <- setNames(sampleData, sampleDataNames)
+sampleData <- sapply(sampleData, as.character)
+```
+
+# Tokenize input
+For further analysis, split the content of the input files into sentences, which will aid in N-gram analysis
+
+```{r, include=FALSE}
+library(stringi)
+# extract sentences from the news blogs and twitter data
+newsData <-
+  unlist(stri_split(str = sampleData$news, regex = "(?<=[?!.])\\s"))
+blogsData <-
+  unlist(stri_split(str = sampleData$blogs, regex = "(?<=[?!.])\\s"))
+twitterData <-
+  unlist(stri_split(str = sampleData$twitter, regex = "(?<=[?!.])\\s"))
+
+```
+
+# Remove profanity words
+```{r, include=FALSE}
+library(tm)
+
+
+removeProfanityWords <- function(sentences) {
+  return(sentences[!grepl(profanityWords, sentences)])
+}
+
+removeRT <- function(textCorpus) {
+  return(gsub("RT", "", textCorpus))
+}
+cleanCorpus <- function(myCorpus) {
+  myCorpus <- tm_map(myCorpus, removeNumbers)
+  myCorpus <- tm_map(myCorpus, removeRT)
+  myCorpus <- tm_map(myCorpus, removeWords, stopwords("en"))
+  myCorpus <- tm_map(myCorpus, removePunctuation)
+  myCorpus <- tm_map(myCorpus, stripWhitespace)
+  myCorpus <- tm_map(myCorpus, tolower)
+  return(myCorpus)
+}
+
+#download a list of profanity words. These has to be removed from our data before
+# further cleaning and analysis
+
+profanityWords = "profanity.csv"
+profanityFileURL = "https://gist.githubusercontent.com/tjrobinson/2366772/raw/97329ead3d5ab06160c3c7ac1d3bcefa4f66b164/profanity.csv"
+if (!file.exists(profanityWords)) {
+  result <-
+    tryCatch(
+      download.file(profanityFileURL, profanityWords, method = "auto"),
+      error = function(e)
+        1
+    )
+  
+}
+
+#read profanity words csv file
+profanityWordsDF <- read.csv(profanityWords, sep = "\n")
+colnames(profanityWordsDF) <- "words"
+profanityWordsVector <- as.vector(profanityWordsDF$words)
+profanityWords <- paste(profanityWordsVector, collapse = "|")
+
+filteredNewsData <- removeProfanityWords(newsData)
+filteredBlogsData <- removeProfanityWords(blogsData)
+filteredTwitterData <- removeProfanityWords(twitterData)
+
+combinedData <-
+  c(filteredNewsData, filteredBlogsData, filteredTwitterData)
+newsCorpus <- Corpus(VectorSource(filteredNewsData))
+blogsCorpus <- Corpus(VectorSource(filteredBlogsData))
+twitterCorpus <- Corpus(VectorSource(filteredTwitterData))
+textCorpus <- Corpus(VectorSource(combinedData))
+```
+
+# Clean corpus
+Once the corpus is created, it has to be cleaned for the most common
+stop words, puncuations etc. 
+``` {r,include=FALSE}
+newsCorpus <- cleanCorpus(newsCorpus)
+blogsCorpus <- cleanCorpus(blogsCorpus)
+twitterCorpus <- cleanCorpus(twitterCorpus)
+textCorpus <- cleanCorpus(textCorpus)
+
+```
+
+# Unigram word frequencies
+word frequencies in data must be computed for unigram model. This is done via TermDocumentMatrix function. This records the number of times a word occurs in a document.
+The unigram plots for news, blogs and twitter data are generated from sample.
+```{r, include=FALSE}
+library(tm)
+library(ggplot2)
+library(gridExtra)
+library(slam)
+
+
+###
+### the function unigramModel takes a corpus as input
+### and returns a data frame that is ordered based on
+### word frequency. The data frame also  has percentage of words, cumulative word frquency etc
+
+unigramModel <- function(corpusToModel) {
+  tdm <- TermDocumentMatrix(corpusToModel)
+  rolluptdm <- rollup(tdm, 2, na.rm = TRUE, FUN = sum)
+  unigramModelDF <-
+    data.frame(words = rolluptdm$dimnames$Terms, freq = rolluptdm$v)
+  unigramModelDF <- unigramModelDF[order(-unigramModelDF$freq),]
+  unigramModelDF$words <-
+    reorder(unigramModelDF$words, unigramModelDF$freq)
+  unigramModelDF$percentage <-
+    (unigramModelDF$freq / sum(unigramModelDF$freq))
+  unigramModelDF$cumsum <- cumsum(unigramModelDF$freq)
+  unigramModelDF$cumpercentage <- cumsum(unigramModelDF$percentage)
+  return (unigramModelDF)
+}
+
+
+unigramNews <- unigramModel(newsCorpus)
+unigramBlogs <- unigramModel(blogsCorpus)
+unigramTwitter <- unigramModel(twitterCorpus)
+unigramText <- unigramModel(textCorpus)
+
+
+
+top10UnigramNews<- unigramNews[1:10,]
+top10UnigramNews$words <- reorder(top10UnigramNews$words, top10UnigramNews$freq)
+top10UnigramNewsPlot <- ggplot(top10UnigramNews, aes(x = words, y = percentage)) +
+    geom_bar(stat = "identity") +
+    ggtitle("News Top10 Unigram") +
+    coord_flip() +
+    theme(legend.position = "none")
+
+top10UnigramBlogs<- unigramBlogs[1:10,]
+top10UnigramBlogs$words <- reorder(top10UnigramBlogs$words, top10UnigramBlogs$freq)
+top10UnigramBlogsPlot <- ggplot(top10UnigramBlogs, aes(x = words, y = percentage)) +
+  geom_bar(stat = "identity") +
+  ggtitle("Blogs Top10 Unigram") +
+  coord_flip() +
+  theme(legend.position = "none")
+
+top10UnigramTwitter<- unigramTwitter[1:10,]
+top10UnigramTwitter$words <- reorder(top10UnigramTwitter$words, top10UnigramTwitter$freq)
+top10UnigramTwitterPlot <- ggplot(top10UnigramTwitter, aes(x = words, y = percentage)) +
+  geom_bar(stat = "identity") +
+  ggtitle("Twitter Top10 Unigram") +
+  coord_flip() +
+  theme(legend.position = "none")
+
+grid.arrange(top10UnigramNewsPlot, top10UnigramTwitterPlot, top10UnigramBlogsPlot, ncol = 3)
+
+
+```
+
+# Bi-gram and Tri-gram analysis.
+Using tokenize_ngrams function, get the two word and three word frequencies. Top 10 bigram and trigram words are plotted
+
+```{r,include=FALSE}
+library(tm)
+library(ggplot2)
+library(gridExtra)
+library(slam)
+library(tokenizers)
+
+# create bigram & trigram for news 
+newsCorpusDF <- unlist(data.frame(text= sapply(newsCorpus, as.character), stringsAsFactors = FALSE))
+newsCorpusBiGram <-vector(mode="character")
+newsCorpusTriGram <-vector(mode="character")
+
+for (i in 1:length(newsCorpusDF)){
+  biGramTokens <- tokenize_ngrams(newsCorpusDF[i], n = 2, simplify= FALSE )
+  newsCorpusBiGram = c(newsCorpusBiGram, biGramTokens[1]) 
+  
+  triGramTokens <- tokenize_ngrams(newsCorpusDF[i], n = 3, simplify= FALSE )
+  newsCorpusTriGram = c(newsCorpusTriGram, triGramTokens[1]) 
+}
+
+newsCorpusBiGramDF <- data.frame(table(unname(unlist(newsCorpusBiGram))))
+newsCorpusBiGramDF$percentage <- (newsCorpusBiGramDF$Freq/sum(newsCorpusBiGramDF$Freq))
+newsCorpusBiGramDF <- newsCorpusBiGramDF[order(-newsCorpusBiGramDF$Freq),]
+colnames(newsCorpusBiGramDF) <- c("words","frequency","percentage")
+
+newsCorpusTriGramDF <- data.frame(table(unname(unlist(newsCorpusTriGram))))
+newsCorpusTriGramDF$percentage <- (newsCorpusTriGramDF$Freq/sum(newsCorpusTriGramDF$Freq))
+newsCorpusTriGramDF <- newsCorpusTriGramDF[order(-newsCorpusTriGramDF$Freq),]
+colnames(newsCorpusTriGramDF) <- c("words","frequency","percentage")
+
+
+
+# create bigram for blogs 
+blogsCorpusDF <- unlist(data.frame(text= sapply(blogsCorpus, as.character), stringsAsFactors = FALSE))
+blogsCorpusBiGram <-vector(mode="character")
+blogsCorpusTriGram <-vector(mode="character")
+
+for (i in 1:length(blogsCorpusDF)){
+  biGramTokens <- tokenize_ngrams(blogsCorpusDF[i], n = 2, simplify= FALSE )
+  blogsCorpusBiGram = c(blogsCorpusBiGram, biGramTokens[1]) 
+  
+  triGramTokens <- tokenize_ngrams(blogsCorpusDF[i], n = 3, simplify= FALSE )
+  blogsCorpusTriGram = c(blogsCorpusTriGram, triGramTokens[1])
+}
+
+blogsCorpusBiGramDF <- data.frame(table(unname(unlist(blogsCorpusBiGram))))
+blogsCorpusBiGramDF$percentage <- (blogsCorpusBiGramDF$Freq/sum(blogsCorpusBiGramDF$Freq))
+blogsCorpusBiGramDF <- blogsCorpusBiGramDF[order(-blogsCorpusBiGramDF$Freq),]
+colnames(blogsCorpusBiGramDF) <- c("words","frequency","percentage")
+
+blogsCorpusTriGramDF <- data.frame(table(unname(unlist(blogsCorpusTriGram))))
+blogsCorpusTriGramDF$percentage <- (blogsCorpusTriGramDF$Freq/sum(blogsCorpusTriGramDF$Freq))
+blogsCorpusTriGramDF <- blogsCorpusTriGramDF[order(-blogsCorpusTriGramDF$Freq),]
+colnames(blogsCorpusTriGramDF) <- c("words","frequency","percentage")
+
+
+# create bigram for twitter 
+twitterCorpusDF <- unlist(data.frame(text= sapply(twitterCorpus, as.character), stringsAsFactors = FALSE))
+twitterCorpusBiGram <-vector(mode="character")
+twitterCorpusTriGram <-vector(mode="character")
+
+for (i in 1:length(twitterCorpusDF)){
+  biGramTokens <- tokenize_ngrams(twitterCorpusDF[i], n = 2, simplify= FALSE )
+  twitterCorpusBiGram = c(twitterCorpusBiGram, biGramTokens[1]) 
+  
+  triGramTokens <- tokenize_ngrams(twitterCorpusDF[i], n = 3, simplify= FALSE )
+  twitterCorpusTriGram = c(twitterCorpusTriGram, triGramTokens[1]) 
+}
+
+twitterCorpusBiGramDF <- data.frame(table(unname(unlist(twitterCorpusBiGram))))
+twitterCorpusBiGramDF$percentage <- (twitterCorpusBiGramDF$Freq/sum(twitterCorpusBiGramDF$Freq))
+twitterCorpusBiGramDF <- twitterCorpusBiGramDF[order(-twitterCorpusBiGramDF$Freq),]
+colnames(twitterCorpusBiGramDF) <- c("words","frequency","percentage")
+
+twitterCorpusTriGramDF <- data.frame(table(unname(unlist(twitterCorpusTriGram))))
+twitterCorpusTriGramDF$percentage <- (twitterCorpusTriGramDF$Freq/sum(twitterCorpusTriGramDF$Freq))
+twitterCorpusTriGramDF <- twitterCorpusTriGramDF[order(-twitterCorpusTriGramDF$Freq),]
+colnames(twitterCorpusTriGramDF) <- c("words","frequency","percentage")
+
+
+top10BigramNews<- newsCorpusBiGramDF[1:10,]
+top10BigramNews$words <- reorder(top10BigramNews$words, top10BigramNews$freq)
+top10BigramNewsPlot <- ggplot(top10BigramNews, aes(x = words, y = percentage)) +
+  geom_bar(stat = "identity") +
+  ggtitle("News Top10 Bigram") +
+  coord_flip() +
+  theme(legend.position = "none")
+
+top10BigramBlogs<- blogsCorpusBiGramDF[1:10,]
+top10BigramBlogs$words <- reorder(top10BigramBlogs$words, top10BigramBlogs$freq)
+top10BigramBlogsPlot <- ggplot(top10BigramBlogs, aes(x = words, y = percentage)) +
+  geom_bar(stat = "identity") +
+  ggtitle("Blogs Top10 Bigram") +
+  coord_flip() +
+  theme(legend.position = "none")
+
+top10BigramTwitter<- twitterCorpusBiGramDF[1:10,]
+top10BigramTwitter$words <- reorder(top10BigramTwitter$words, top10BigramTwitter$freq)
+top10BigramTwitterPlot <- ggplot(top10BigramTwitter, aes(x = words, y = percentage)) +
+  geom_bar(stat = "identity") +
+  ggtitle("Twitter Top10 Bigram") +
+  coord_flip() +
+  theme(legend.position = "none")
+
+
+
+top10TrigramNews<- newsCorpusTriGramDF[1:10,]
+top10TrigramNews$words <- reorder(top10TrigramNews$words, top10TrigramNews$freq)
+top10TrigramNewsPlot <- ggplot(top10TrigramNews, aes(x = words, y = percentage)) +
+  geom_bar(stat = "identity") +
+  ggtitle("News Top10 Trigram") +
+  coord_flip() +
+  theme(legend.position = "none")
+
+top10TrigramBlogs<- blogsCorpusTriGramDF[1:10,]
+top10TrigramBlogs$words <- reorder(top10TrigramBlogs$words, top10TrigramBlogs$freq)
+top10TrigramBlogsPlot <- ggplot(top10TrigramBlogs, aes(x = words, y = percentage)) +
+  geom_bar(stat = "identity") +
+  ggtitle("Blogs Top10 Trigram") +
+  coord_flip() +
+  theme(legend.position = "none")
+
+top10TrigramTwitter<- twitterCorpusTriGramDF[1:10,]
+top10TrigramTwitter$words <- reorder(top10TrigramTwitter$words, top10TrigramTwitter$freq)
+top10TrigramTwitterPlot <- ggplot(top10TrigramTwitter, aes(x = words, y = percentage)) +
+  geom_bar(stat = "identity") +
+  ggtitle("Twitter Top10 Trigram") +
+  coord_flip() +
+  theme(legend.position = "none")
+
+grid.arrange(top10BigramNewsPlot, top10BigramBlogsPlot, top10BigramTwitterPlot, ncol = 3)
+
+grid.arrange(top10TrigramNewsPlot, top10TrigramBlogsPlot, top10TrigramTwitterPlot, ncol = 3)
+
+
+```
+
+## Build Predictive Text Model
+Further to n-gram plots, the next steps would be to
+
+build a predictive text model to predict the next word based on previous 3-gram, 2-gram or 1-gram
+improve the efficiency of the code to make prediction time lesser
+
+create a shiny app to apply the predictive model to interactive use
+
+## Source Code
+
+Rmarkdown file for this report can be found at:
